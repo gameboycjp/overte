@@ -27,6 +27,9 @@
 #include <qfile.h>
 #include <qfileinfo.h>
 
+#define CGLTF_IMPLEMENTATION
+#include <cgltf/cgltf.h>
+
 #include <shared/NsightHelpers.h>
 #include <NetworkAccessManager.h>
 #include <ResourceManager.h>
