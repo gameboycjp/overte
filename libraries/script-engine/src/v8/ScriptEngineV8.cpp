@@ -77,6 +77,17 @@ bool ScriptEngineV8::IS_THREADSAFE_INVOCATION(const QThread* thread, const QStri
     return false;
 }
 
+QString getFileNameFromTryCatch(v8::TryCatch &tryCatch, v8::Isolate *isolate, v8::Local<v8::Context> &context ) {
+    v8::Local<v8::Message> exceptionMessage = tryCatch.Message();
+    QString errorFileName;
+    auto resource = exceptionMessage->GetScriptResourceName();
+    v8::Local<v8::String> v8resourceString;
+    if (resource->ToString(context).ToLocal(&v8resourceString)) {
+        errorFileName = QString(*v8::String::Utf8Value(isolate, v8resourceString));
+    }
+    return errorFileName;
+}
+
 ScriptValue ScriptEngineV8::makeError(const ScriptValue& _other, const QString& type) {
     if (!IS_THREADSAFE_INVOCATION(thread(), __FUNCTION__)) {
         return nullValue();
@@ -656,7 +667,13 @@ ScriptValue ScriptEngineV8::evaluateInClosure(const ScriptValue& _closure,
                 QString errorMessage = QString(__FUNCTION__) + " hasCaught:" + QString(*utf8Value) + "\n"
                     + "tryCatch details:" + formatErrorMessageFromTryCatch(tryCatch);
                 if (_manager) {
-                    _manager->scriptErrorMessage(errorMessage);
+                    v8::Local<v8::Message> exceptionMessage = tryCatch.Message();
+                    int errorLineNumber = -1;
+                    if (!exceptionMessage.IsEmpty()) {
+                        errorLineNumber = exceptionMessage->GetLineNumber(closureContext).FromJust();
+                    }
+                    _manager->scriptErrorMessage(errorMessage, getFileNameFromTryCatch(tryCatch, _v8Isolate, closureContext),
+                                                          errorLineNumber);
                 } else {
                     qWarning(scriptengine_v8) << errorMessage;
                 }
@@ -702,15 +719,22 @@ ScriptValue ScriptEngineV8::evaluate(const QString& sourceCode, const QString& f
     v8::Locker locker(_v8Isolate);
     v8::Isolate::Scope isolateScope(_v8Isolate);
     v8::HandleScope handleScope(_v8Isolate);
-    v8::Context::Scope contextScope(getContext());
+    auto context = getContext();
+    v8::Context::Scope contextScope(context);
     v8::ScriptOrigin scriptOrigin(getIsolate(), v8::String::NewFromUtf8(getIsolate(), fileName.toStdString().c_str()).ToLocalChecked());
     v8::Local<v8::Script> script;
     {
         v8::TryCatch tryCatch(getIsolate());
-        if (!v8::Script::Compile(getContext(), v8::String::NewFromUtf8(getIsolate(), sourceCode.toStdString().c_str()).ToLocalChecked(), &scriptOrigin).ToLocal(&script)) {
+        if (!v8::Script::Compile(context, v8::String::NewFromUtf8(getIsolate(), sourceCode.toStdString().c_str()).ToLocalChecked(), &scriptOrigin).ToLocal(&script)) {
             QString errorMessage(QString("Error while compiling script: \"") + fileName + QString("\" ") + formatErrorMessageFromTryCatch(tryCatch));
             if (_manager) {
-                _manager->scriptErrorMessage(errorMessage);
+                v8::Local<v8::Message> exceptionMessage = tryCatch.Message();
+                int errorLineNumber = -1;
+                if (!exceptionMessage.IsEmpty()) {
+                    errorLineNumber = exceptionMessage->GetLineNumber(context).FromJust();
+                }
+                _manager->scriptErrorMessage(errorMessage, getFileNameFromTryCatch(tryCatch, _v8Isolate, context),
+                                                      errorLineNumber);
             } else {
                 qDebug(scriptengine_v8) << errorMessage;
             }
@@ -722,13 +746,19 @@ ScriptValue ScriptEngineV8::evaluate(const QString& sourceCode, const QString& f
 
     v8::Local<v8::Value> result;
     v8::TryCatch tryCatchRun(getIsolate());
-    if (!script->Run(getContext()).ToLocal(&result)) {
+    if (!script->Run(context).ToLocal(&result)) {
         Q_ASSERT(tryCatchRun.HasCaught());
         auto runError = tryCatchRun.Message();
         ScriptValue errorValue(new ScriptValueV8Wrapper(this, V8ScriptValue(this, runError->Get())));
         QString errorMessage(QString("Running script: \"") + fileName + QString("\" ") + formatErrorMessageFromTryCatch(tryCatchRun));
         if (_manager) {
-            _manager->scriptErrorMessage(errorMessage);
+            v8::Local<v8::Message> exceptionMessage = tryCatchRun.Message();
+            int errorLineNumber = -1;
+            if (!exceptionMessage.IsEmpty()) {
+                errorLineNumber = exceptionMessage->GetLineNumber(context).FromJust();
+            }
+            _manager->scriptErrorMessage(errorMessage, getFileNameFromTryCatch(tryCatchRun, _v8Isolate, context),
+                                                  errorLineNumber);
         } else {
             qDebug(scriptengine_v8) << errorMessage;
         }
